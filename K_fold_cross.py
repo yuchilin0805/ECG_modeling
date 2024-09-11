@@ -2,42 +2,49 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from dataset import ECGDataset,PTBDataset,shaoxingDataset
-from utils import split_data
-# from resnet import resnet34, resnet18
-# from lstm import LSTMModel,GRUModel
-from models import resnet34,resnet18,LSTMModel,GRUModel,Mamba,RetNet
-from models import Residual_Conv_GRU, Residual_Conv_LSTM, Residual_ConvTransformer,Residual_conv_retnet, Residual_Conv_Mamba
-from models import mini_Residual_Conv_GRU, mini_Residual_ConvTransformer, Residual_Conv_GRU_test,Transformer
-
-from models import ResU_Dense, MLBF_net, SGB, cpsc_champion,CLINet
-
-from models import BasicBlock1d
-from rednet import rednet18
+from utils.dataset import ECGDataset,PTBDataset,shaoxingDataset
+from utils.utils import split_data
+from utils.models.models import resnet34,resnet18,LSTMModel,GRUModel,Mamba,RetNet
+from utils.models.models import Residual_Conv_GRU, Residual_Conv_LSTM, Residual_ConvTransformer,Residual_conv_retnet, Residual_Conv_Mamba
+from utils.models.models import mini_Residual_Conv_GRU, mini_Residual_ConvTransformer, Transformer
+from utils.models.models import ResU_Dense, MLBF_net, SGB, cpsc_champion,CLINet
 
 import warnings
 from tqdm import tqdm
-from utils import cal_f1s, cal_aucs, cal_scores
 import numpy as np
-
-import torch
-import torch.quantization
-from torch.ao.quantization import get_default_qconfig_mapping
-from torch.ao.quantization.quantize_fx import prepare_fx
-import torch.cuda.amp as amp
-from tqdm import tqdm
-import pandas as pd
 import datetime
-# import wfdb
 import time
 from argparse import ArgumentParser
-from sklearn.metrics import confusion_matrix,average_precision_score, precision_recall_curve
-from sklearn.metrics import accuracy_score
-from torchsummary import summary
-from utils import write_csv, write_summary_csv, print_prediction
-from pruning import prune
+from utils.utils import write_csv, write_summary_csv, print_prediction
+from utils.pruning import prune
 
 def train(dataloader, net, args, criterion, epoch, scheduler, optimizer, device, dataset):
+    """
+    Trains the neural network model for one epoch using the provided data loader.
+
+    Args:
+        dataloader (torch.utils.data.DataLoader): The data loader containing the training data and labels.
+        net (torch.nn.Module): The neural network model to be trained.
+        args (Namespace): Arguments containing training parameters such as quantization settings, model type, and dataset name.
+        criterion (torch.nn.Module): The loss function to compute training loss.
+        epoch (int): The current epoch number.
+        scheduler (torch.optim.lr_scheduler): Learning rate scheduler to adjust the learning rate.
+        optimizer (torch.optim.Optimizer): The optimizer for updating model weights.
+        device (torch.device): The device (CPU/GPU) to perform training on.
+        dataset (Dataset): The dataset being used for training.
+
+    Returns:
+        tuple: A tuple containing:
+            - avg_accuracy (float): The average accuracy over all samples and labels.
+            - avg_precision (float): The average precision over all samples and labels.
+            - avg_recall (float): The average recall over all samples and labels.
+            - avg_f1 (float): The average F1 score over all samples and labels.
+            - balanced_accuracy (float): The balanced accuracy considering all classes.
+
+    Description:
+        This function runs one training epoch. It processes batches of data, computes the loss, updates the model's parameters, and tracks accuracy, precision, recall, and F1 score. It also handles optional quantization and provides performance metrics for each epoch.
+    """
+
     print(f'Training epoch {epoch}:')
     net.train()
     running_loss = 0
@@ -66,7 +73,6 @@ def train(dataloader, net, args, criterion, epoch, scheduler, optimizer, device,
             optimizer.step()                   
         
         running_loss += loss.item()
-
         
         # Convert outputs to binary predictions
         predicted = torch.sigmoid(outputs).data > args.threshold
@@ -89,7 +95,6 @@ def train(dataloader, net, args, criterion, epoch, scheduler, optimizer, device,
     num_samples=sample_per_label.tolist()
     y_pred=np.vstack(output_list)  
     y_true=np.vstack(labels_list)
-    y_output=np.vstack(output_value_list)
     
     for i in range(labels.size(1)):
         accuracy = correct_preds_per_label[i].item() / total_preds_per_label
@@ -109,8 +114,32 @@ def train(dataloader, net, args, criterion, epoch, scheduler, optimizer, device,
     
     return avg_accuracy, avg_precision, avg_recall, avg_f1, balanced_accuracy
 
-
 def evaluate(dataloader, net, args, criterion, device, model_path,dataset):
+    """
+    Evaluates the performance of the neural network model on the validation data.
+
+    Args:
+        dataloader (torch.utils.data.DataLoader): The data loader containing the validation data and labels.
+        net (torch.nn.Module): The neural network model to be evaluated.
+        args (Namespace): Arguments containing evaluation parameters such as quantization settings, model type, and dataset name.
+        criterion (torch.nn.Module): The loss function to compute validation loss.
+        device (torch.device): The device (CPU/GPU) to perform validation on.
+        model_path (str): Path to save the model checkpoint if the validation performance improves.
+        dataset (Dataset): The dataset being used for validation.
+
+    Returns:
+        tuple: A tuple containing:
+            - avg_accuracy (float): The average accuracy over all samples and labels.
+            - avg_precision (float): The average precision over all samples and labels.
+            - avg_recall (float): The average recall over all samples and labels.
+            - avg_f1 (float): The average F1 score over all samples and labels.
+            - avg_inference_time (float): The average inference time for each batch.
+            - balanced_accuracy (float): The balanced accuracy considering all classes.
+
+    Description:
+        This function evaluates the model using the validation dataset. It computes performance metrics such as loss, accuracy, precision, recall, F1 score, and balanced accuracy. It also tracks inference speed and saves the model if performance exceeds previous best metrics.
+    """
+
     print('Validating...')
     net.eval()
     running_loss = 0
@@ -156,7 +185,6 @@ def evaluate(dataloader, net, args, criterion, device, model_path,dataset):
             for label in labels:
                 sample_per_label+=label
 
-
         num_samples=sample_per_label.tolist()
         for i in range(labels.size(1)):
             accuracy = correct_preds_per_label[i].item() / total_preds_per_label
@@ -183,16 +211,13 @@ def evaluate(dataloader, net, args, criterion, device, model_path,dataset):
         print(f'Average inference speed:{avg_inference_time:.4f}')
 
         if args.phase == 'train' and balanced_accuracy>args.best_metric:
-            args.best_metric = balanced_accuracy#avg_f1
+            args.best_metric = balanced_accuracy
             print(model_path)
             if(args.prune):
-                # net.zero_grad() # Remove gradients
                 torch.save(net, model_path) # without .state_dict
-                
             else:
                 torch.save(net.state_dict(), model_path)
         
-
     if(args.quantize):
         print_prediction(args, y_pred, y_true,y_output,dataset, path=f'{args.model_dir[:-7]}/results/preds/{args.model_name}_quantize{args.quantization_precision}_fold{fold_idx}_val_preds.csv')
     else:
@@ -202,17 +227,37 @@ def evaluate(dataloader, net, args, criterion, device, model_path,dataset):
 
 
 def cal_score(y_true,y_pred, args, phase,dataset, balanced_accuracy, accuracy_per_label): 
-    #cal accuracy and write per label results
+    """
+    Calculates performance metrics such as accuracy, precision, recall, and F1 score for each class and overall.
+
+    Args:
+        y_true (np.ndarray): Ground truth labels.
+        y_pred (np.ndarray): Predicted labels.
+        args (Namespace): Arguments containing evaluation parameters.
+        phase (str): Phase of the evaluation (e.g., 'train', 'val').
+        dataset (Dataset): The dataset being evaluated.
+        balanced_accuracy (float): The balanced accuracy computed previously.
+        accuracy_per_label (list): The accuracy for each label.
+
+    Returns:
+        tuple: A tuple containing:
+            - avg_accuracy (float): The average accuracy across all classes.
+            - avg_precision (float): The average precision across all classes.
+            - avg_recall (float): The average recall across all classes.
+            - avg_f1 (float): The average F1 score across all classes.
+            - balanced_accuracy (float): The calculated balanced accuracy.
+
+    Description:
+        This function computes and returns various performance metrics, including confusion matrix-based precision, recall, and F1 score for each label. It also saves these results in a CSV file for further analysis.
+    """
+    
     precision_per_label=[]
     recall_per_label=[]
     f1_per_label=[]
 
     cm=np.zeros((args.num_classes,args.num_classes))
     for i,j in zip(y_true,y_pred):
-        # idxi=np.argmax(i)   
-        # idxj=np.argmax(j)        
-        nonzeroi=np.nonzero(i)[0]
-        
+        nonzeroi=np.nonzero(i)[0]        
         nonzeroj=np.nonzero(j)[0]
         for idxi in nonzeroi:
             for idxj in nonzeroj:
@@ -229,25 +274,37 @@ def cal_score(y_true,y_pred, args, phase,dataset, balanced_accuracy, accuracy_pe
         precision_per_label.append(precision)
         recall_per_label.append(recall)
         f1_per_label.append(f1_score)
-      
+    
     avg_accuracy = sum(accuracy_per_label) / len(accuracy_per_label)
     avg_precision = sum(precision_per_label) / len(precision_per_label)
     avg_recall = sum(recall_per_label) / len(recall_per_label)
     avg_f1 = sum(f1_per_label) / len(f1_per_label)
-    
-    
+        
     csv_file_name=f'{args.model_dir[:-7]}/results/{args.model_name}_{phase}_{fold_idx}_folds.csv'
     write_csv(csv_file_name, dataset, accuracy_per_label, precision_per_label, recall_per_label, f1_per_label, 
         avg_accuracy, avg_precision, avg_recall, avg_f1) 
 
     return avg_accuracy,avg_precision, avg_recall, avg_f1, balanced_accuracy
 
-
 def model_initialize(nleads,args,device):
-    # Initialize model
+    """
+    Initializes and returns a neural network model based on the specified architecture in the arguments.
+
+    Args:
+        nleads (int): The number of input channels/leads for the model.
+        args (Namespace): Arguments containing model configuration (e.g., model type, number of classes).
+        device (torch.device): The device (CPU/GPU) on which the model will be loaded.
+
+    Returns:
+        torch.nn.Module: The initialized neural network model.
+
+    Description:
+        Based on the `args.model_used` parameter, this function initializes various types of models such as LSTM, ResNet, GRU, RetNet, and others. The model is loaded onto the specified device (CPU or GPU).
+    """
+    
     print(args.model_used)
     if(args.model_used=='lstm'):
-        input_size = 15000  # Number of ECG leads
+        input_size = 15000  
         hidden_size = 128  # Adjust as needed
         num_layers = 2  # Adjust as needed
         net = LSTMModel(input_size, hidden_size, num_layers, args.num_classes)
@@ -289,8 +346,7 @@ def model_initialize(nleads,args,device):
         else:
             net = mini_Residual_Conv_GRU( input_size=input_size, batch_size=args.batch_size, input_channels=nleads, 
                                 num_classes=args.num_classes,GRU_hidden_size=hidden_size,GRU_num_layers=num_layers)
-        net = net.to(device)
-        
+        net = net.to(device)        
     elif(args.model_used=='Residual_Conv_LSTM'):
         print('Residual_Conv_LSTM')
         input_size=15000
@@ -308,10 +364,8 @@ def model_initialize(nleads,args,device):
         else:
             net = mini_Residual_ConvTransformer( input_size=input_size, batch_size=args.batch_size, input_channels=nleads, 
                                 num_classes=args.num_classes, num_layers=2)
-        net = net.to(device)
-        
-    elif(args.model_used=='Residual_conv_retnet'):
-        
+        net = net.to(device)        
+    elif(args.model_used=='Residual_conv_retnet'):        
         input_size=15000
         net = Residual_conv_retnet( input_size=input_size, batch_size=args.batch_size, input_channels=nleads, 
                                 num_classes=args.num_classes, num_layers=2,hidden_dim=64,ffn_size=128,quantize=args.quantize)
@@ -340,7 +394,6 @@ def model_initialize(nleads,args,device):
     
     return net
 
-
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 class Args:
@@ -349,7 +402,7 @@ class Args:
     seed = 42    
     batch_size = 32
     num_workers = 8
-    phase = 'train'#'train'
+    phase = 'train'
     epochs = 1
     folds = 10
     resume = False
@@ -399,7 +452,7 @@ class Args:
         model_path =model_dir+model_name
     
     quantize = False
-    prune = True
+    prune = False
     quantization_precision = 16  
     if quantize :
         model_path=model_dir+"ResU_Dense_2024-07-28-12:18_all_42" 
@@ -410,12 +463,70 @@ class Args:
     if resume:
         resume_model_path=model_dir+""   
 
-    gpu_number=2
-    
+    gpu_number=2    
 
 args = Args()
 
 if __name__ == "__main__":
+    """
+    Main script for initializing and running ECG model training and evaluation with support for different datasets,
+    pruning, quantization, and various model architectures.
+
+    Args:
+        -config_file (str, optional): Path to the configuration file containing model parameters. Default is None.
+
+    Workflow:
+        1. Argument Parsing:
+           The script parses arguments from the command line, allowing the user to specify a configuration file. If a config file is provided, it loads parameters such as learning rate, model path, and other settings.
+        
+        2. Model and Directory Setup:
+           It sets up the model path and ensures the necessary directories (e.g., for models) exist. It checks if GPU is available and sets the device accordingly (CPU or GPU).
+        
+        3. Data Loading:
+           The script loads ECG datasets (CPSC-2018, PTB-XL, Shaoxing-Ninbo) based on the selected dataset. For each dataset, the appropriate `DataLoader` is created for training, validation, and test sets.
+        
+        4. Model Initialization:
+           The model is initialized based on the specified architecture (e.g., LSTM, ResNet, etc.). It supports model pruning and quantization if specified in the configuration.
+        
+        5. Training Loop:
+           The model is trained using the specified optimizer (e.g., Adam) and learning rate scheduler (e.g., StepLR). Training metrics such as accuracy, precision, recall, F1 score, and balanced accuracy are calculated.
+        
+        6. Evaluation:
+           After training, the model is evaluated on the validation dataset for each fold. Evaluation metrics are calculated similarly to the training metrics.
+        
+        7. Model Pruning/Quantization:
+           If model pruning or quantization is enabled, the corresponding model transformation (pruning or half-precision conversion) is applied.
+
+        8. Results Summary:
+           After training and evaluation, the results (accuracy, precision, recall, F1 score) are summarized for both the training and validation phases. The summary is saved to a CSV file.
+
+    Datasets:
+        - CPSC-2018 ECG Dataset
+        - PTB-XL ECG Dataset
+        - Shaoxing-Ninbo ECG Dataset
+
+    Model Architectures:
+        - Supports several model architectures like LSTM, ResNet, GRU, RetNet, Mamba, Residual Convolution-based models, etc.
+
+    Pruning/Quantization:
+        - Supports model pruning and 16-bit quantization for reducing model size and improving inference efficiency.
+
+    Attributes:
+        args (Namespace): Parsed arguments or configuration settings.
+        data_dir (str): Path to the directory where ECG data is stored.
+        database (str): The name of the database being used.
+        model_dir (str): Directory where models will be saved.
+        model_path (str): Path to save or load model weights.
+        train_loader (DataLoader): DataLoader for training data.
+        val_loader (DataLoader): DataLoader for validation data.
+        test_loader (DataLoader): DataLoader for test data.
+
+    Expected Output:
+        The script prints and saves the following metrics for each fold:
+        - Training and validation accuracy, precision, recall, F1 score, and balanced accuracy.
+        - Model size in bits and MB.
+        - A summary of the results is saved in CSV format for each fold and the average across all folds.
+    """
     parser = ArgumentParser()
     parser.add_argument("-config_file", help="config_file",dest="config_file",default=None)
     arguments = parser.parse_args()
@@ -426,18 +537,17 @@ if __name__ == "__main__":
                 tmp=line.split(':')
                 if(tmp[0]=='lr'):
                     val=float(tmp[1]) 
+                elif(tmp[0]=='model_path'):
+                    val=tmp[1]+':'+tmp[2]
                 else:
                     val=int(tmp[1]) if tmp[1].isnumeric()  else tmp[1]
-                setattr(args,tmp[0],val)            
-        args.model_dir = f'/media/user/nvme0/ECG-modeling/{args.dataset_name}/models/'
-        args.data_dir = f'/media/user/nvme0/ECG-modeling/{args.dataset_name}/datas/'  
-        args.model_name = f'{args.model_used}_{args.ct}_{args.leads}_{args.seed}.pth'
-        args.model_path = args.model_dir + args.model_name
-    
+                setattr(args,tmp[0],val)
+        if(not args.prune and not args.quantize):
+            args.model_name = f'{args.model_used}_{args.ct}_{args.leads}_{args.seed}.pth'
+            args.model_path = args.model_dir + args.model_name    
 
     data_dir = os.path.normpath(args.data_dir)
     database = os.path.basename(data_dir)
-    
 
     # Set the model path if it's not already set
     if not args.model_path:
@@ -460,7 +570,6 @@ if __name__ == "__main__":
     leads = args.leads.split(',') if args.leads != 'all' else 'all'
     nleads = len(leads) if args.leads != 'all' else 12    
     label_csv = os.path.join(data_dir, 'labels.csv')
-    # Assuming split_data, ECGDataset, and resnet34 are defined elsewhere
     folds = split_data(seed=args.seed)   
     test_folds = folds[9:]    
     train_val_folds = folds[:9]    
@@ -468,30 +577,23 @@ if __name__ == "__main__":
     acc_list_val,precision_list_val,recall_list_val,f1_list_val=[],[],[],[]
     bal_acc_list, bal_acc_list_val=[],[]
     
-    
     for fold_idx in range(len(train_val_folds)):
         args.best_metric = 0
         # initialize model
         net = model_initialize(nleads, args,device)
-        print(args.model_used)
         
-
         if(args.prune):
             print(args.model_path)
             path = args.model_path+f'_fold{fold_idx}.pth'
             print(path)
             pruned_model = prune(args, path, device, net)
-
             net = pruned_model.to(device)
             net.eval()
-
-        if(args.quantize):
-            print("q",args.quantization_precision)
+        elif(args.quantize):
             print(args.model_path)
             path = args.model_path+f'_fold{fold_idx}.pth'
             print(path)
             net.load_state_dict(torch.load(path, map_location=device))
-            
             net=net.to('cpu')            
             net.eval()
             quantized_model=net.half()
@@ -509,7 +611,6 @@ if __name__ == "__main__":
         val_folds = [train_val_folds[fold_idx]]        
         train_folds = [fold for i, fold in enumerate(folds) if i != fold_idx]
         
-
         if(args.dataset_name == 'cpsc_2018'):
             print("CPSC-2018")
             train_dataset = ECGDataset('train', data_dir, label_csv, train_folds, leads)
@@ -563,7 +664,6 @@ if __name__ == "__main__":
                     f1_list.append(avg_f1) 
                     bal_acc_list.append(balanced_accuracy)
 
-
                 if (args.quantize):
                     model_path=args.model_dir+f"{args.model_name}_quantize{args.quantization_precision}_fold{fold_idx}.pth"
                 elif(args.prune):
@@ -593,7 +693,6 @@ if __name__ == "__main__":
 
     train_avg_f1 = sum(f1_list)/len(f1_list)
     val_avg_f1 = sum(f1_list_val)/len(f1_list_val)
-    
     
     train_avg_bal = sum(bal_acc_list)/len(bal_acc_list)
     val_avg_bal = sum(bal_acc_list_val)/len(bal_acc_list_val)
