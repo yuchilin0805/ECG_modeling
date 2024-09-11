@@ -107,12 +107,16 @@ def inference(model, model_name, data_file_name, device):
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 class Args:
-    # python inference.py -model_name  cpsc_2018/models/Residual_Conv_GRU_2024-08-15-21:49_all_42_fold0.pth -data_file cpsc_2018/datas/A0001 
-    dataset_name='cpsc_2018'
+    # python inference.py -model_name  cpsc_2018/models/resnet18_2024-08-29-21:18_all_42_fold0.pth -data_file cpsc_2018/datas/A0001 
+    # python inference.py -model_name ptb-xl/models/Residual_Conv_GRU_2024-08-15-22:06_all_42_fold0.pth -data_file ptb-xl/datas/00001_hr 
+    # python inference.py -model_name shaoxing-ninbo/models/Residual_Conv_GRU_2024-08-15-22:07_all_42_fold0.pth -data_file shaoxing-ninbo/datas/JS00001 
+    
+    
+    dataset_name='shaoxing-ninbo'
     batch_size=32
     use_gpu = True  # Set to True if you want to use GPU and it's available
     ct = str(datetime.datetime.now())[:10]+'-'+str(datetime.datetime.now())[11:16]
-    model_used='Residual_Conv_GRU'
+    model_used='resnet18'
     if(dataset_name=='cpsc_2018'):  
         num_classes = 9 
     elif(dataset_name=='ptb-xl'):

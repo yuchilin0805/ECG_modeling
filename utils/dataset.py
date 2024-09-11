@@ -5,7 +5,6 @@ from torch.utils.data import Dataset
 import pandas as pd
 import numpy as np
 import wfdb
-from utils.utils import split_data
 
 def scaling(X, sigma=0.1):
     scalingFactor = np.random.normal(loc=1.0, scale=sigma, size=(1, X.shape[1]))

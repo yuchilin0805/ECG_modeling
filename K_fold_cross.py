@@ -331,7 +331,7 @@ def model_initialize(nleads,args,device):
         print("mamba")        
         d_model = 32 # dimension of model
         expand = 2
-        enc_in = 2 
+        enc_in = 12 
         c_out = args.num_classes           
         net = Mamba(d_model, expand, enc_in, c_out, d_conv=4, d_ff=32, e_layers=2, dropout=0.05)
         net = net.to(device)
@@ -461,7 +461,7 @@ class Args:
         model_path = model_dir+'Residual_Conv_GRU_2024-08-15-21:49_all_42'
 
     if resume:
-        resume_model_path=model_dir+""   
+        resume_model_path=model_dir+"Mamba_2024-07-06-13:55_all_42"   
 
     gpu_number=2    
 
